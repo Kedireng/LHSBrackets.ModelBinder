@@ -4,6 +4,12 @@ namespace LHSBrackets.ModelBinder
     {
         Eq,
         Ne,
+        Li,
+        Nli,
+        Sw,
+        Nsw,
+        Ew,
+        New,
         Gt,
         Gte,
         Lt,

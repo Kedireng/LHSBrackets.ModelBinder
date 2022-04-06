@@ -21,13 +21,21 @@ namespace LHSBrackets.ModelBinder
                 case FilterOperationEnum.Lte:
                     this.Add((operation, new List<T>{ (T)ConvertValue(value) }, false));
                     break;
+                case FilterOperationEnum.Li:
+                case FilterOperationEnum.Nli:
+                case FilterOperationEnum.Sw:
+                case FilterOperationEnum.Nsw:
+                case FilterOperationEnum.Ew:
+                case FilterOperationEnum.New:
+                    this.Add((operation, new List<T> { (T)GetString(value) }, false));
+                    break;
                 case FilterOperationEnum.In:
                 case FilterOperationEnum.Nin:
                     var items = value.Split(",");
                     this.Add((operation, items.Select(x => (T)ConvertValue(x.Trim(' '))), true));
                     break;
                 default:
-                    throw new Exception($"Operation type: {operation.ToString()} is unhandled.");
+                    throw new Exception($"Operation type: {operation} is unhandled.");
             }
         }
 
@@ -47,6 +55,16 @@ namespace LHSBrackets.ModelBinder
             }
 
             return convertedValue;
+        }
+
+        private object GetString(string value)
+        {
+            var type = typeof(T);
+
+            if (!typeof(string).IsAssignableFrom(type))
+                throw new Exception($"Operation type can only be used with string types.");
+
+            return value;
         }
     }
 }
