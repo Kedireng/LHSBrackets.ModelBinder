@@ -8,18 +8,41 @@ using System.Threading;
 
 namespace LHSBrackets.ModelBinder
 {
-    public class FilterOperations<T> : List<(FilterOperationEnum operation, IEnumerable<T> values, bool hasMultipleValues)>
+    public class FilterOperations<T> : FilterOperations
     {
+        public FilterOperations() : base(typeof(T))
+        { }
+
+        public override FilterOperations GetPs() => this;
+    }
+
+    public abstract class FilterOperations : List<(FilterOperationEnum operation, IEnumerable<object> values, bool hasMultipleValues)>
+    {
+        public Type InnerType { get; set; }
+        public abstract FilterOperations GetPs();
+
+        public FilterOperations(Type innerType)
+        {
+            InnerType = innerType;
+        }
+
         internal void SetValue(FilterOperationEnum operation, string value)
         {
-            switch (operation){
+            Type myGeneric = typeof(List<>);
+            Type constructedClass = myGeneric.MakeGenericType(InnerType);
+            object created = Activator.CreateInstance(constructedClass)!;
+            dynamic list = created;
+            bool hasMultipleValues = false;
+            switch (operation)
+            {
                 case FilterOperationEnum.Eq:
                 case FilterOperationEnum.Ne:
                 case FilterOperationEnum.Gt:
                 case FilterOperationEnum.Gte:
                 case FilterOperationEnum.Lt:
                 case FilterOperationEnum.Lte:
-                    this.Add((operation, new List<T>{ (T)ConvertValue(value) }, false));
+                    list.Add(ConvertValue(value));
+                    hasMultipleValues = false;
                     break;
                 case FilterOperationEnum.Li:
                 case FilterOperationEnum.Nli:
@@ -27,21 +50,24 @@ namespace LHSBrackets.ModelBinder
                 case FilterOperationEnum.Nsw:
                 case FilterOperationEnum.Ew:
                 case FilterOperationEnum.New:
-                    this.Add((operation, new List<T> { (T)GetString(value) }, false));
+                    list.Add(GetString(value));
+                    hasMultipleValues = false;
                     break;
                 case FilterOperationEnum.In:
                 case FilterOperationEnum.Nin:
                     var items = value.Split(",");
-                    this.Add((operation, items.Select(x => (T)ConvertValue(x.Trim(' '))), true));
+                    list.AddRange(items.Select(x => ConvertValue(x.Trim(' '))));
+                    hasMultipleValues = true;
                     break;
                 default:
                     throw new Exception($"Operation type: {operation} is unhandled.");
             }
+            this.Add((operation, list, hasMultipleValues));
         }
 
         private object ConvertValue(string value)
         {
-            var converter = TypeDescriptor.GetConverter(typeof(T));
+            var converter = TypeDescriptor.GetConverter(InnerType);
             object convertedValue;
             try
             {
@@ -57,11 +83,9 @@ namespace LHSBrackets.ModelBinder
             return convertedValue;
         }
 
-        private object GetString(string value)
+        private string GetString(string value)
         {
-            var type = typeof(T);
-
-            if (!typeof(string).IsAssignableFrom(type))
+            if (!typeof(string).IsAssignableFrom(InnerType))
                 throw new Exception($"Operation type can only be used with string types.");
 
             return value;

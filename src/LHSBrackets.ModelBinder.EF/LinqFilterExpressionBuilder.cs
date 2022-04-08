@@ -8,29 +8,77 @@ namespace LHSBrackets.ModelBinder.EF
 {
     public static class LinqFilterExpressionBuilder
     {
+        /// <summary>
+        /// BROKEN
+        /// </summary>
+        /// <typeparam name="TEntity"></typeparam>
+        /// <typeparam name="TKey"></typeparam>
+        /// <param name="queryable"></param>
+        /// <param name="query"></param>
+        /// <returns></returns>
+        public static IQueryable<TEntity> ApplyAllFilters<TEntity, TKey>(
+            this IQueryable<TEntity> queryable,
+            TKey query) where TKey : FilterRequest
+        {
+            var type = typeof(TEntity);
+            var queryType = query.GetType();
+
+            var entityProps = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+
+            var localQueryable = queryable;
+
+            foreach (var prop in queryType
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Where(x => typeof(FilterOperations).IsAssignableFrom(x.PropertyType)))
+            {
+                var found = entityProps.FirstOrDefault(x => x.Name == prop.Name && x.PropertyType == prop.PropertyType.GetGenericArguments()[0]);
+
+                if (found == null) continue;
+
+                var param = Expression.Parameter(typeof(TEntity));
+                var body = Expression.PropertyOrField(param, found.Name);
+                Type myGeneric = typeof(Func<,>);
+                Type constructedClass = myGeneric.MakeGenericType(typeof(TEntity), prop.PropertyType.GetGenericArguments()[0]);
+                var exp = Expression.Lambda(constructedClass, body, param);
+
+                localQueryable = localQueryable.ApplyFilters(exp, (FilterOperations)prop.GetValue(query, null)!);
+            }
+
+            return localQueryable;
+        }
+
         public static IQueryable<TEntity> ApplyFilters<TEntity, TKey>(
             this IQueryable<TEntity> source,
             Expression<Func<TEntity, TKey>> selector,
             FilterOperations<TKey>? filters)
         {
-            if(filters == null)
+            return source.ApplyFilters((LambdaExpression)selector, filters);
+
+        }
+
+        public static IQueryable<TEntity> ApplyFilters<TEntity>(
+            this IQueryable<TEntity> source,
+            LambdaExpression selector,
+            FilterOperations? filters)
+        {
+            if (filters == null)
                 return source;
 
             var filterExpressions = new List<Expression<Func<TEntity, bool>>>();
 
-            filterExpressions.AddRange(CreateFilters<TEntity, TKey>(selector, filters));
+            filterExpressions.AddRange(CreateFilters<TEntity>(selector, filters));
             foreach (var expression in filterExpressions)
             {
                 source = source.Where(expression);
             }
 
             return source;
-
         }
 
-        private static Func<Expression, Expression, Expression> MapOperationToLinqExpression(FilterOperationEnum filterOperationType) 
+        private static Func<Expression, Expression, Expression> MapOperationToLinqExpression(FilterOperationEnum filterOperationType)
         {
-            switch(filterOperationType){
+            switch (filterOperationType)
+            {
                 case FilterOperationEnum.Eq: return Expression.Equal;
                 case FilterOperationEnum.Ne: return Expression.NotEqual;
                 case FilterOperationEnum.Gt: return Expression.GreaterThan;
@@ -78,35 +126,38 @@ namespace LHSBrackets.ModelBinder.EF
             && m.GetParameters().First().ParameterType == typeof(String)), inverted);
         }
 
-        private static List<Expression<Func<TEntity, bool>>> CreateFilters<TEntity, TKey>(Expression<Func<TEntity, TKey>> selector, FilterOperations<TKey> filterOperations)
+        private static List<Expression<Func<TEntity, bool>>> CreateFilters<TEntity>(LambdaExpression selector, FilterOperations filterOperations)
         {
             var expressions = new List<Expression<Func<TEntity, bool>>>();
 
             foreach (var filterOperation in filterOperations)
             {
-                if (filterOperation.values.Any()
-                    && (filterOperation.operation == FilterOperationEnum.Li
+                var enumerator = filterOperation.values.GetEnumerator();
+                var any = enumerator.MoveNext();
+                if (!any) continue;
+
+                if (filterOperation.operation == FilterOperationEnum.Li
                     || filterOperation.operation == FilterOperationEnum.Nli
                     || filterOperation.operation == FilterOperationEnum.Sw
                     || filterOperation.operation == FilterOperationEnum.Nsw
                     || filterOperation.operation == FilterOperationEnum.Ew
-                    || filterOperation.operation == FilterOperationEnum.New))
+                    || filterOperation.operation == FilterOperationEnum.New)
                 {
                     (var method, var inverted) = MapOperationToStringMethod(filterOperation.operation);
-                    var exp = CreateStringExpression(method, selector, filterOperation.values.First(), inverted);
+                    var exp = CreateStringExpression<TEntity>(method, selector, enumerator.Current, inverted);
                     expressions.Add(exp);
                 }
-                else if (!filterOperation.hasMultipleValues && filterOperation.values.Any())
+                else if (!filterOperation.hasMultipleValues)
                 {
                     {
                         var linqOperationExp = MapOperationToLinqExpression(filterOperation.operation);
-                        var linqExpression = CreateBasicExpression(linqOperationExp, selector, filterOperation.values.First());
+                        var linqExpression = CreateBasicExpression<TEntity>(linqOperationExp, selector, enumerator.Current);
                         expressions.Add(linqExpression);
                     }
                 }
                 else
                 {
-                    var linqContainsExpression = CreateContainsExpression(selector, filterOperation.values, filterOperation.operation == FilterOperationEnum.Nin);
+                    var linqContainsExpression = CreateContainsExpression<TEntity>(selector, filterOperation.values, filterOperation.operation == FilterOperationEnum.Nin);
                     expressions.Add(linqContainsExpression);
                 }
             }
@@ -114,14 +165,14 @@ namespace LHSBrackets.ModelBinder.EF
             return expressions;
         }
 
-        private static Expression<Func<TEntity, bool>> CreateStringExpression<TEntity, TKey>(
+        private static Expression<Func<TEntity, bool>> CreateStringExpression<TEntity>(
             MethodInfo stringMethod,
-            Expression<Func<TEntity, TKey>> selector,
-            TKey value,
+            LambdaExpression selector,
+            object value,
             bool invert = false)
         {
-            (var left, var param) = CreateLeftExpression(selector);
-            left = Expression.Convert(left, typeof(TKey));
+            (var left, var param) = CreateLeftExpression(typeof(TEntity), selector);
+            left = Expression.Convert(left, selector.ReturnType);
             Expression right = Expression.Constant(value);
             var methods = typeof(string).GetMethods();
             var toLowerMethod = methods.Single(m => m.Name == nameof(String.ToLower)
@@ -131,6 +182,7 @@ namespace LHSBrackets.ModelBinder.EF
             Expression loweredRight = Expression.Call(right, toLowerMethod);
             Expression containsExpression = Expression.Call(loweredLeft, stringMethod, loweredRight);
             if (invert == true) containsExpression = Expression.Not(containsExpression);
+
             var lambdaExpression = Expression.Lambda<Func<TEntity, bool>>(containsExpression, param);
             return lambdaExpression;
         }
@@ -138,18 +190,18 @@ namespace LHSBrackets.ModelBinder.EF
         /// <summary>
         /// it is nasty AF to work with list of nullables so we just use right hand side's type as it is and convert left to be the same
         /// </summary>
-        private static Expression<Func<TEntity, bool>> CreateContainsExpression<TEntity, TKey>(
-            Expression<Func<TEntity, TKey>> selector,
-            IEnumerable<TKey> values,
+        private static Expression<Func<TEntity, bool>> CreateContainsExpression<TEntity>(
+            LambdaExpression selector,
+            IEnumerable<object> values,
             bool invert = false)
         {
-            (var left, var param) = CreateLeftExpression(selector);
-            left = Expression.Convert(left, typeof(TKey));
+            (var left, var param) = CreateLeftExpression(typeof(TEntity), selector);
+            left = Expression.Convert(left, selector.ReturnType);
             Expression right = Expression.Constant(values);
 
             var containsMethodRef = typeof(Enumerable).GetMethods(BindingFlags.Static | BindingFlags.Public)
                    .Single(m => m.Name == nameof(Enumerable.Contains) && m.GetParameters().Length == 2);
-            MethodInfo containsMethod = containsMethodRef.MakeGenericMethod(typeof(TKey));
+            MethodInfo containsMethod = containsMethodRef.MakeGenericMethod(selector.ReturnType);
 
             Expression containsExpression = Expression.Call(containsMethod, right, left);
             if (invert == true) containsExpression = Expression.Not(containsExpression);
@@ -158,13 +210,13 @@ namespace LHSBrackets.ModelBinder.EF
             return lambdaExpression;
         }
 
-        private static Expression<Func<TEntity, bool>> CreateBasicExpression<TEntity, TKey>(
+        private static Expression<Func<TEntity, bool>> CreateBasicExpression<TEntity>(
             Func<Expression, Expression, Expression> expressionOperator,
-            Expression<Func<TEntity, TKey>> selector,
-            TKey value)
+            LambdaExpression selector,
+            object value)
         {
-            (var left, var param) = CreateLeftExpression(selector);
-            var nullableType = MakeNullableType(typeof(TKey)); // we need to convert stuff to the same type so they are aligned
+            (var left, var param) = CreateLeftExpression(typeof(TEntity), selector);
+            var nullableType = MakeNullableType(selector.ReturnType);
             left = Expression.Convert(left, nullableType);
             Expression right = Expression.Constant(value, nullableType);
 
@@ -176,10 +228,10 @@ namespace LHSBrackets.ModelBinder.EF
         /// <summary>
         /// This will take care of nested navigation properties as well
         /// </summary>
-        static (Expression Left, ParameterExpression Param) CreateLeftExpression<TEntity, TKey>(Expression<Func<TEntity, TKey>> selector)
+        static (Expression Left, ParameterExpression Param) CreateLeftExpression(Type parameterType, LambdaExpression selector)
         {
             var parameterName = "x";
-            var parameter = Expression.Parameter(typeof(TEntity), parameterName);
+            var parameter = Expression.Parameter(parameterType, parameterName);
 
             var propertyName = GetParameterName(selector);
             var memberExpression = (Expression)parameter;
@@ -190,7 +242,7 @@ namespace LHSBrackets.ModelBinder.EF
             return (memberExpression, parameter);
         }
 
-        private static string GetParameterName<TEntity, TKey>(Expression<Func<TEntity, TKey>> expression)
+        private static string GetParameterName(LambdaExpression expression)
         {
             // this is the case for datetimes, enums and possibly others. Possibly navigation properties.
             if (!(expression.Body is MemberExpression memberExpression))
