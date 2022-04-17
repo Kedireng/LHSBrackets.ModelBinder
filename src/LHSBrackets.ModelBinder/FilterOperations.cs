@@ -28,10 +28,7 @@ namespace LHSBrackets.ModelBinder
 
         internal void SetValue(FilterOperationEnum operation, string value)
         {
-            Type myGeneric = typeof(List<>);
-            Type constructedClass = myGeneric.MakeGenericType(InnerType);
-            object created = Activator.CreateInstance(constructedClass)!;
-            dynamic list = created;
+            var list = new List<object>();
             bool hasMultipleValues = false;
             switch (operation)
             {
