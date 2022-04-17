@@ -41,7 +41,10 @@ namespace LHSBrackets.ModelBinder
                 case FilterOperationEnum.Gte:
                 case FilterOperationEnum.Lt:
                 case FilterOperationEnum.Lte:
-                    list.Add(ConvertValue(value));
+                    var gottenObj = ConvertValue(value);
+                    dynamic d = gottenObj;
+                    var convertedObject = Convert.ChangeType(d, InnerType);
+                    list.Add(convertedObject);
                     hasMultipleValues = false;
                     break;
                 case FilterOperationEnum.Li:
