@@ -9,7 +9,7 @@ namespace LHSBrackets.ModelBinder.EF
     public static class LinqFilterExpressionBuilder
     {
         /// <summary>
-        /// BROKEN
+        /// Apply all FilterRequest filters to IQueryable
         /// </summary>
         /// <typeparam name="TEntity"></typeparam>
         /// <typeparam name="TKey"></typeparam>
