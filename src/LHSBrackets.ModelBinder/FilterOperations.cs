@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Threading;
 
 namespace LHSBrackets.ModelBinder
@@ -16,7 +17,7 @@ namespace LHSBrackets.ModelBinder
         public override FilterOperations GetPs() => this;
     }
 
-    public abstract class FilterOperations : List<(FilterOperationEnum operation, IEnumerable<object> values, bool hasMultipleValues)>
+    public abstract class FilterOperations : List<(FilterOperationEnum operation, IEnumerable<object> values, bool hasMultipleValues, LambdaExpression? selector)>
     {
         public Type InnerType { get; set; }
         public abstract FilterOperations GetPs();
@@ -26,7 +27,7 @@ namespace LHSBrackets.ModelBinder
             InnerType = innerType;
         }
 
-        internal void SetValue(FilterOperationEnum operation, string value)
+        internal void SetValue(FilterOperationEnum operation, string value, LambdaExpression? selector)
         {
             var list = new List<object>();
             bool hasMultipleValues = false;
@@ -38,9 +39,11 @@ namespace LHSBrackets.ModelBinder
                 case FilterOperationEnum.Gte:
                 case FilterOperationEnum.Lt:
                 case FilterOperationEnum.Lte:
-                    var gottenObj = ConvertValue(value);
+                    var gottenObj = ConvertValue(value, selector);
                     dynamic d = gottenObj;
-                    var convertedObject = Convert.ChangeType(d, InnerType);
+                    object? convertedObject;
+                    if (selector == null) convertedObject = Convert.ChangeType(d, InnerType);
+                    else convertedObject = Convert.ChangeType(d, selector.ReturnType);
                     list.Add(convertedObject);
                     hasMultipleValues = false;
                     break;
@@ -56,18 +59,26 @@ namespace LHSBrackets.ModelBinder
                 case FilterOperationEnum.In:
                 case FilterOperationEnum.Nin:
                     var items = value.Split(",");
-                    list.AddRange(items.Select(x => ConvertValue(x.Trim(' '))));
+                    list.AddRange(items.Select(x => ConvertValue(x.Trim(' '), selector)));
                     hasMultipleValues = true;
                     break;
                 default:
                     throw new Exception($"Operation type: {operation} is unhandled.");
             }
-            this.Add((operation, list, hasMultipleValues));
+            this.Add((operation, list, hasMultipleValues, selector));
         }
 
-        private object ConvertValue(string value)
+        private object ConvertValue(string value, LambdaExpression? selector)
         {
-            var converter = TypeDescriptor.GetConverter(InnerType);
+            TypeConverter converter;
+            if (selector == null)
+            {
+                converter = TypeDescriptor.GetConverter(InnerType);
+            }
+            else
+            {
+                converter = TypeDescriptor.GetConverter(selector.ReturnType);
+            }
             object convertedValue;
             try
             {

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
@@ -22,7 +23,7 @@ namespace LHSBrackets.ModelBinder
             var properties = bindingContext.ModelType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
             foreach (var prop in properties)
             {
-                if (!prop.PropertyType.IsGenericType || prop.PropertyType.GetGenericTypeDefinition() != typeof(FilterOperations<>))
+                if (!typeof(FilterOperations).IsAssignableFrom(prop.PropertyType))
                 {
                     var converter = TypeDescriptor.GetConverter(prop.PropertyType);
                     object convertedValue;
@@ -40,19 +41,43 @@ namespace LHSBrackets.ModelBinder
                     }
                 }
 
+                var inst = (FilterOperations)Activator.CreateInstance(prop.PropertyType)!;
+                if (inst.InnerType.IsClass && !inst.InnerType.Namespace!.StartsWith("System"))
+                {
+                    var innerProperties = inst.InnerType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+                    foreach (var innerProp in innerProperties)
+                    {
+                        foreach (var operation in Enum.GetValues<FilterOperationEnum>())
+                        {
+                            var valueProviderResult = bindingContext.ValueProvider
+                                .GetValue($"{prop.Name}[{innerProp.Name}][{operation}]".ToLower()); // ex: "author[email][eq]"
+                            if (valueProviderResult.Length > 0)
+                            {
+                                var param = Expression.Parameter(inst.InnerType);
+                                var body = Expression.Property(param, innerProp);
+                                Type myGeneric = typeof(Func<,>);
+                                Type constructedClass = myGeneric.MakeGenericType(inst.InnerType, innerProp.PropertyType);
+                                var exp = Expression.Lambda(constructedClass, body, param);
+
+                                SetValueOnProperty(requestModel, prop, operation, (string)valueProviderResult.Values, exp);
+                            }
+                        }
+                    }
+                }
+
                 EnsurePrimitiveType(prop);
 
                 foreach (var operation in Enum.GetValues<FilterOperationEnum>())
                 {
                     var valueProviderResult = bindingContext.ValueProvider.GetValue($"{prop.Name}[{operation.ToString()}]".ToLower()); // ex: "author[eq]"
                     if (valueProviderResult.Length > 0)
-                        SetValueOnProperty(requestModel, prop, operation, (string)valueProviderResult.Values);
+                        SetValueOnProperty(requestModel, prop, operation, (string)valueProviderResult.Values, null);
                 }
 
                 // support regular query param without operation ex: categoryId=2
                 var valueProviderResult2 = bindingContext.ValueProvider.GetValue($"{prop.Name}".ToLower()); // ex: "author[eq]"
                 if (valueProviderResult2.Length > 0)
-                    SetValueOnProperty(requestModel, prop, FilterOperationEnum.Eq, (string)valueProviderResult2.Values);
+                    SetValueOnProperty(requestModel, prop, FilterOperationEnum.Eq, (string)valueProviderResult2.Values, null);
             }
 
             bindingContext.Result = ModelBindingResult.Success(requestModel);
@@ -65,7 +90,7 @@ namespace LHSBrackets.ModelBinder
             return;
         }
 
-        private static void SetValueOnProperty(object? requestModel, PropertyInfo prop, FilterOperationEnum operation, string value)
+        private static void SetValueOnProperty(object? requestModel, PropertyInfo prop, FilterOperationEnum operation, string value, LambdaExpression? selector)
         {
             var propertyObject = prop.GetValue(requestModel, null);
             if(propertyObject == null) // property not instantiated
@@ -74,8 +99,8 @@ namespace LHSBrackets.ModelBinder
                 prop.SetValue(requestModel, propertyObject);
             }
 
-            var method = prop.PropertyType.GetMethod(nameof(FilterOperations<object>.SetValue), BindingFlags.Instance | BindingFlags.NonPublic);
-            method!.Invoke(propertyObject, new object[] { operation, value });
+            var method = prop.PropertyType.GetMethod(nameof(FilterOperations.SetValue), BindingFlags.Instance | BindingFlags.NonPublic);
+            method!.Invoke(propertyObject, new object[] { operation, value, selector });
         }
     }
 }

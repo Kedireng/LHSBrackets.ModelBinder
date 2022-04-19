@@ -40,8 +40,9 @@ namespace LHSBrackets.ModelBinder.EF
                 Type myGeneric = typeof(Func<,>);
                 Type constructedClass = myGeneric.MakeGenericType(typeof(TEntity), prop.PropertyType.GetGenericArguments()[0]);
                 var exp = Expression.Lambda(constructedClass, body, param);
+                var fo = (FilterOperations)prop.GetValue(query, null)!;
 
-                localQueryable = localQueryable.ApplyFilters(exp, (FilterOperations)prop.GetValue(query, null)!);
+                localQueryable = localQueryable.ApplyFilters(exp, fo);
             }
 
             return localQueryable;
@@ -135,6 +136,15 @@ namespace LHSBrackets.ModelBinder.EF
                 var enumerator = filterOperation.values.GetEnumerator();
                 var any = enumerator.MoveNext();
                 if (!any) continue;
+
+                if (filterOperation.selector != null)
+                {
+                    var selBody = selector.Body as MemberExpression;
+                    var body = Expression.Property(selBody, (PropertyInfo)((MemberExpression)filterOperation.selector.Body).Member);
+                    Type myGeneric = typeof(Func<,>);
+                    Type constructedClass = myGeneric.MakeGenericType(typeof(TEntity), filterOperation.selector.ReturnType);
+                    selector = Expression.Lambda(constructedClass, body, selector.Parameters);
+                }
 
                 if (filterOperation.operation == FilterOperationEnum.Li
                     || filterOperation.operation == FilterOperationEnum.Nli
