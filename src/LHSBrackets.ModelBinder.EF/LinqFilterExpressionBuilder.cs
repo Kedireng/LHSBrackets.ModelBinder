@@ -197,7 +197,13 @@ namespace LHSBrackets.ModelBinder.EF
         {
             (var left, var param) = CreateLeftExpression(typeof(TEntity), selector);
             left = Expression.Convert(left, selector.ReturnType);
-            Expression right = Expression.Constant(values);
+            Type listType = typeof(List<>).MakeGenericType(new[] { selector.ReturnType });
+            dynamic list = (dynamic)Activator.CreateInstance(listType)!;
+            foreach(dynamic val in values)
+            {
+                list.Add(Convert.ChangeType(val, selector.ReturnType));
+            }
+            Expression right = Expression.Constant(list);
 
             var containsMethodRef = typeof(Enumerable).GetMethods(BindingFlags.Static | BindingFlags.Public)
                    .Single(m => m.Name == nameof(Enumerable.Contains) && m.GetParameters().Length == 2);

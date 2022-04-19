@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
+using System.Globalization;
 using System.Reflection;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
@@ -17,11 +19,26 @@ namespace LHSBrackets.ModelBinder
             if (requestModel is FilterRequest filterRequest == false)
                 throw new ArgumentException($"The modeltype {requestModel?.GetType()} does not inherit from {typeof(FilterRequest)}");
 
-            var properties = bindingContext.ModelType.GetProperties(BindingFlags.DeclaredOnly | BindingFlags.Public | BindingFlags.Instance);
+            var properties = bindingContext.ModelType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
             foreach (var prop in properties)
             {
-                if (prop.PropertyType.GetGenericTypeDefinition() != typeof(FilterOperations<>))
-                    continue;
+                if (!prop.PropertyType.IsGenericType || prop.PropertyType.GetGenericTypeDefinition() != typeof(FilterOperations<>))
+                {
+                    var converter = TypeDescriptor.GetConverter(prop.PropertyType);
+                    object convertedValue;
+                    try
+                    {
+                        var value = bindingContext.ValueProvider.GetValue($"{prop.Name}".ToLower());
+                        if (value.FirstValue == null) continue;
+                        convertedValue = converter.ConvertFromString(null, new CultureInfo("en-GB"), (string)value.Values);
+                        prop.SetValue(requestModel, convertedValue);
+                        continue;
+                    }
+                    catch (NotSupportedException)
+                    {
+                        throw;
+                    }
+                }
 
                 EnsurePrimitiveType(prop);
 
