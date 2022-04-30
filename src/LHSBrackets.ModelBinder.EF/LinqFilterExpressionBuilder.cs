@@ -206,12 +206,13 @@ namespace LHSBrackets.ModelBinder.EF
             bool invert = false)
         {
             (var left, var param) = CreateLeftExpression(typeof(TEntity), selector);
-            left = Expression.Convert(left, selector.ReturnType);
             Type listType = typeof(List<>).MakeGenericType(new[] { selector.ReturnType });
             dynamic list = (dynamic)Activator.CreateInstance(listType)!;
             foreach(dynamic val in values)
             {
-                list.Add(Convert.ChangeType(val, selector.ReturnType));
+                Type t = Nullable.GetUnderlyingType(selector.ReturnType) ?? selector.ReturnType;
+
+                list.Add(Convert.ChangeType(val, t));
             }
             Expression right = Expression.Constant(list);
 
