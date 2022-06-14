@@ -18,7 +18,7 @@ namespace LHSBrackets.ModelBinder.EF
         /// <returns></returns>
         public static IQueryable<TEntity> ApplyAllFilters<TEntity, TKey>(
             this IQueryable<TEntity> queryable,
-            TKey query) where TKey : FilterRequest
+            TKey query) where TKey : FilterRequest<TEntity>
         {
             var type = typeof(TEntity);
             var queryType = query.GetType();
@@ -31,14 +31,23 @@ namespace LHSBrackets.ModelBinder.EF
                 .GetProperties(BindingFlags.Public | BindingFlags.Instance)
                 .Where(x => typeof(FilterOperations).IsAssignableFrom(x.PropertyType)))
             {
-                var found = entityProps.FirstOrDefault(x => x.Name == prop.Name && x.PropertyType == prop.PropertyType.GetGenericArguments()[0]);
+                Type? propType;
+                if (prop.PropertyType.GetGenericArguments()[0].IsAssignableToGenericType(typeof(FilterRequest<>)))
+                {
+                    propType = prop.PropertyType.GetGenericArguments()[0].GetGenericArguments()[0];
+                }
+                else
+                {
+                    propType = prop.PropertyType.GetGenericArguments()[0];
+                }
+                var found = entityProps.FirstOrDefault(x => x.Name == prop.Name && x.PropertyType == propType);
 
                 if (found == null) continue;
 
                 var param = Expression.Parameter(typeof(TEntity));
                 var body = Expression.PropertyOrField(param, found.Name);
                 Type myGeneric = typeof(Func<,>);
-                Type constructedClass = myGeneric.MakeGenericType(typeof(TEntity), prop.PropertyType.GetGenericArguments()[0]);
+                Type constructedClass = myGeneric.MakeGenericType(typeof(TEntity), propType);
                 var exp = Expression.Lambda(constructedClass, body, param);
                 var fo = (FilterOperations)prop.GetValue(query, null)!;
 

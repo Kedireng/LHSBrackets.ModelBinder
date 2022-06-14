@@ -12,7 +12,7 @@ namespace LHSBrackets.ModelBinder
                 throw new ArgumentNullException(nameof(context));
             }
 
-            if (typeof(FilterRequest).IsAssignableFrom(context.Metadata.UnderlyingOrModelType))
+            if (context.Metadata.UnderlyingOrModelType.IsAssignableToGenericType(typeof(FilterRequest<>)))
             {
                 return new FilterModelBinder();
             }

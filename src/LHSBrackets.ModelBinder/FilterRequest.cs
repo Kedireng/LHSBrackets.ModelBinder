@@ -4,7 +4,7 @@ using System.Linq;
 
 namespace LHSBrackets.ModelBinder
 {
-    public abstract class FilterRequest
+    public abstract class FilterRequest<T>
     {
     }
 }

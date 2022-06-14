@@ -17,8 +17,8 @@ namespace LHSBrackets.ModelBinder
                 throw new ArgumentNullException(nameof(bindingContext));
 
             var requestModel = Activator.CreateInstance(bindingContext.ModelType);
-            if (requestModel is FilterRequest filterRequest == false)
-                throw new ArgumentException($"The modeltype {requestModel?.GetType()} does not inherit from {typeof(FilterRequest)}");
+            if (!bindingContext.ModelType.IsAssignableToGenericType(typeof(FilterRequest<>)))
+                throw new ArgumentException($"The modeltype {requestModel?.GetType()} does not inherit from {typeof(FilterRequest<>)}");
 
             var properties = bindingContext.ModelType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
             foreach (var prop in properties)
@@ -53,13 +53,29 @@ namespace LHSBrackets.ModelBinder
                                 .GetValue($"{prop.Name}[{innerProp.Name}][{operation}]".ToLower()); // ex: "author[email][eq]"
                             if (valueProviderResult.Length > 0)
                             {
-                                var param = Expression.Parameter(inst.InnerType);
-                                var body = Expression.Property(param, innerProp);
-                                Type myGeneric = typeof(Func<,>);
-                                Type constructedClass = myGeneric.MakeGenericType(inst.InnerType, innerProp.PropertyType);
-                                var exp = Expression.Lambda(constructedClass, body, param);
+                                if (inst.InnerType.IsAssignableToGenericType(typeof(FilterRequest<>)))
+                                {
+                                    var innerType = inst.InnerType.GetGenericArguments()[0];
+                                    var innerTypeProp = innerType.GetProperty(innerProp.Name);
+                                    if (innerTypeProp == null) continue;
+                                    var param = Expression.Parameter(innerType);
+                                    var body = Expression.Property(param, innerTypeProp);
+                                    Type myGeneric = typeof(Func<,>);
+                                    Type constructedClass = myGeneric.MakeGenericType(innerType, innerTypeProp.PropertyType);
+                                    var exp = Expression.Lambda(constructedClass, body, param);
 
-                                SetValueOnProperty(requestModel, prop, operation, (string)valueProviderResult.Values, exp);
+                                    SetValueOnProperty(requestModel, prop, operation, (string)valueProviderResult.Values, exp);
+                                }
+                                else
+                                {
+                                    var param = Expression.Parameter(inst.InnerType);
+                                    var body = Expression.Property(param, innerProp);
+                                    Type myGeneric = typeof(Func<,>);
+                                    Type constructedClass = myGeneric.MakeGenericType(inst.InnerType, innerProp.PropertyType);
+                                    var exp = Expression.Lambda(constructedClass, body, param);
+
+                                    SetValueOnProperty(requestModel, prop, operation, (string)valueProviderResult.Values, exp);
+                                }
                             }
                         }
                     }
@@ -69,7 +85,7 @@ namespace LHSBrackets.ModelBinder
 
                 foreach (var operation in Enum.GetValues<FilterOperationEnum>())
                 {
-                    var valueProviderResult = bindingContext.ValueProvider.GetValue($"{prop.Name}[{operation.ToString()}]".ToLower()); // ex: "author[eq]"
+                    var valueProviderResult = bindingContext.ValueProvider.GetValue($"{prop.Name}[{operation}]".ToLower()); // ex: "author[eq]"
                     if (valueProviderResult.Length > 0)
                         SetValueOnProperty(requestModel, prop, operation, (string)valueProviderResult.Values, null);
                 }
