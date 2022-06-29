@@ -55,7 +55,20 @@ namespace LHSBrackets.ModelBinder
                             {
                                 if (inst.InnerType.IsAssignableToGenericType(typeof(FilterRequest<>)))
                                 {
-                                    var innerType = inst.InnerType.GetGenericArguments()[0];
+                                    Type? innerType = null;
+                                    Type? baseType = inst.InnerType;
+                                    while (null != (baseType = baseType.BaseType))
+                                    {
+                                        if (baseType.IsGenericType)
+                                        {
+                                            var generic = baseType.GetGenericTypeDefinition();
+                                            if (generic == typeof(FilterRequest<>))
+                                            {
+                                                innerType = baseType.GetGenericArguments()[0];
+                                                break;
+                                            }
+                                        }
+                                    }
                                     var innerTypeProp = innerType.GetProperty(innerProp.Name);
                                     if (innerTypeProp == null) continue;
                                     var param = Expression.Parameter(innerType);

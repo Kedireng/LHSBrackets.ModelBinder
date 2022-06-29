@@ -31,10 +31,22 @@ namespace LHSBrackets.ModelBinder.EF
                 .GetProperties(BindingFlags.Public | BindingFlags.Instance)
                 .Where(x => typeof(FilterOperations).IsAssignableFrom(x.PropertyType)))
             {
-                Type? propType;
+                Type? propType = null;
                 if (prop.PropertyType.GetGenericArguments()[0].IsAssignableToGenericType(typeof(FilterRequest<>)))
                 {
-                    propType = prop.PropertyType.GetGenericArguments()[0].GetGenericArguments()[0];
+                    Type? baseType = prop.PropertyType.GetGenericArguments()[0];
+                    while (null != (baseType = baseType.BaseType))
+                    {
+                        if (baseType.IsGenericType)
+                        {
+                            var generic = baseType.GetGenericTypeDefinition();
+                            if (generic == typeof(FilterRequest<>))
+                            {
+                                propType = baseType.GetGenericArguments()[0];
+                                break;
+                            }
+                        }
+                    }
                 }
                 else
                 {
@@ -76,6 +88,7 @@ namespace LHSBrackets.ModelBinder.EF
 
             var filterExpressions = new List<Expression<Func<TEntity, bool>>>();
 
+           
             filterExpressions.AddRange(CreateFilters<TEntity>(selector, filters));
             foreach (var expression in filterExpressions)
             {
@@ -146,13 +159,15 @@ namespace LHSBrackets.ModelBinder.EF
                 var any = enumerator.MoveNext();
                 if (!any) continue;
 
+                var localSelector = selector;
+
                 if (filterOperation.selector != null)
                 {
                     var selBody = selector.Body as MemberExpression;
                     var body = Expression.Property(selBody, (PropertyInfo)((MemberExpression)filterOperation.selector.Body).Member);
                     Type myGeneric = typeof(Func<,>);
                     Type constructedClass = myGeneric.MakeGenericType(typeof(TEntity), filterOperation.selector.ReturnType);
-                    selector = Expression.Lambda(constructedClass, body, selector.Parameters);
+                    localSelector = Expression.Lambda(constructedClass, body, selector.Parameters);
                 }
 
                 if (filterOperation.operation == FilterOperationEnum.Li
@@ -163,20 +178,20 @@ namespace LHSBrackets.ModelBinder.EF
                     || filterOperation.operation == FilterOperationEnum.New)
                 {
                     (var method, var inverted) = MapOperationToStringMethod(filterOperation.operation);
-                    var exp = CreateStringExpression<TEntity>(method, selector, enumerator.Current, inverted);
+                    var exp = CreateStringExpression<TEntity>(method, localSelector, enumerator.Current, inverted);
                     expressions.Add(exp);
                 }
                 else if (!filterOperation.hasMultipleValues)
                 {
                     {
                         var linqOperationExp = MapOperationToLinqExpression(filterOperation.operation);
-                        var linqExpression = CreateBasicExpression<TEntity>(linqOperationExp, selector, enumerator.Current);
+                        var linqExpression = CreateBasicExpression<TEntity>(linqOperationExp, localSelector, enumerator.Current);
                         expressions.Add(linqExpression);
                     }
                 }
                 else
                 {
-                    var linqContainsExpression = CreateContainsExpression<TEntity>(selector, filterOperation.values, filterOperation.operation == FilterOperationEnum.Nin);
+                    var linqContainsExpression = CreateContainsExpression<TEntity>(localSelector, filterOperation.values, filterOperation.operation == FilterOperationEnum.Nin);
                     expressions.Add(linqContainsExpression);
                 }
             }
