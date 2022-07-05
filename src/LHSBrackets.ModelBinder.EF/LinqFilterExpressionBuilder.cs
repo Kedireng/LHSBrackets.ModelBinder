@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
@@ -59,7 +60,7 @@ namespace LHSBrackets.ModelBinder.EF
                 var param = Expression.Parameter(typeof(TEntity));
                 var body = Expression.PropertyOrField(param, found.Name);
                 Type myGeneric = typeof(Func<,>);
-                Type constructedClass = myGeneric.MakeGenericType(typeof(TEntity), propType);
+                Type constructedClass = myGeneric.MakeGenericType(typeof(TEntity), propType!);
                 var exp = Expression.Lambda(constructedClass, body, param);
                 var fo = (FilterOperations)prop.GetValue(query, null)!;
 
@@ -160,6 +161,7 @@ namespace LHSBrackets.ModelBinder.EF
                 if (!any) continue;
 
                 var localSelector = selector;
+                Expression<Func<TEntity, bool>>? exp = null;
 
                 if (filterOperation.selector != null)
                 {
@@ -178,22 +180,21 @@ namespace LHSBrackets.ModelBinder.EF
                     || filterOperation.operation == FilterOperationEnum.New)
                 {
                     (var method, var inverted) = MapOperationToStringMethod(filterOperation.operation);
-                    var exp = CreateStringExpression<TEntity>(method, localSelector, enumerator.Current, inverted);
-                    expressions.Add(exp);
+                    exp = CreateStringExpression<TEntity>(method, localSelector, enumerator.Current, inverted);
                 }
                 else if (!filterOperation.hasMultipleValues)
                 {
                     {
                         var linqOperationExp = MapOperationToLinqExpression(filterOperation.operation);
-                        var linqExpression = CreateBasicExpression<TEntity>(linqOperationExp, localSelector, enumerator.Current);
-                        expressions.Add(linqExpression);
+                        exp = CreateBasicExpression<TEntity>(linqOperationExp, localSelector, enumerator.Current);
                     }
                 }
                 else
                 {
-                    var linqContainsExpression = CreateContainsExpression<TEntity>(localSelector, filterOperation.values, filterOperation.operation == FilterOperationEnum.Nin);
-                    expressions.Add(linqContainsExpression);
+                    exp = CreateContainsExpression<TEntity>(localSelector, filterOperation.values, filterOperation.operation == FilterOperationEnum.Nin);
                 }
+
+                expressions.Add(exp);
             }
 
             return expressions;

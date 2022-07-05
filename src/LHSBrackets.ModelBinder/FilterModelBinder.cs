@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
@@ -25,19 +26,77 @@ namespace LHSBrackets.ModelBinder
             {
                 if (!typeof(FilterOperations).IsAssignableFrom(prop.PropertyType))
                 {
-                    var converter = TypeDescriptor.GetConverter(prop.PropertyType);
-                    object convertedValue;
-                    try
+                    if (typeof(IEnumerable).IsAssignableFrom(prop.PropertyType) && prop.PropertyType.GetGenericArguments().Length == 1)
                     {
-                        var value = bindingContext.ValueProvider.GetValue($"{prop.Name}".ToLower());
-                        if (value.FirstValue == null) continue;
-                        convertedValue = converter.ConvertFromString(null, new CultureInfo("en-GB"), (string)value.Values);
-                        prop.SetValue(requestModel, convertedValue);
+                        var innerProperties = prop.PropertyType.GetGenericArguments()[0].GetProperties(BindingFlags.Public | BindingFlags.Instance);
+                        dynamic obj = Activator.CreateInstance(prop.PropertyType)!;
+                        int i = 0;
+                        while (true)
+                        {
+                            var oneFound = false;
+                            dynamic innerObj = Activator.CreateInstance(prop.PropertyType.GetGenericArguments()[0])!;
+                            foreach (var innerProp in innerProperties)
+                            {
+                                foreach (var operation in Enum.GetValues<FilterOperationEnum>())
+                                {
+                                    var valueProviderRes = bindingContext.ValueProvider
+                                        .GetValue($"{prop.Name}[{i}][{innerProp.Name}][{operation}]".ToLower()); // ex: "author[email][eq]"
+                                    if (valueProviderRes.Length == 0) continue;
+                                    oneFound = true;
+                                    if (prop.PropertyType.GetGenericArguments()[0].IsAssignableToGenericType(typeof(FilterRequest<>)))
+                                    {
+                                        Type? innerType = null;
+                                        Type? baseType = prop.PropertyType.GetGenericArguments()[0];
+                                        while (null != (baseType = baseType.BaseType))
+                                        {
+                                            if (baseType.IsGenericType)
+                                            {
+                                                var generic = baseType.GetGenericTypeDefinition();
+                                                if (generic == typeof(FilterRequest<>))
+                                                {
+                                                    innerType = baseType.GetGenericArguments()[0];
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        var innerTypeProp = innerType!.GetProperty(innerProp.Name);
+                                        if (innerTypeProp == null) continue;
+                                        var param = Expression.Parameter(innerType);
+                                        var body = Expression.Property(param, innerTypeProp);
+                                        Type myGeneric = typeof(Func<,>);
+                                        Type constructedClass = myGeneric.MakeGenericType(innerType, innerTypeProp.PropertyType);
+                                        var exp = Expression.Lambda(constructedClass, body, param);
+
+                                        SetValueOnProperty(innerObj, innerProp, operation, (string)valueProviderRes.Values, null);
+                                    }
+                                }
+                            }
+                            if (!oneFound) break;
+                            obj.Add(innerObj);
+                            i++;
+                        }
+                        if (obj.Count != 0)
+                        {
+                            prop.SetValue(requestModel, obj);
+                        }
                         continue;
                     }
-                    catch (NotSupportedException)
+                    else
                     {
-                        throw;
+                        var converter = TypeDescriptor.GetConverter(prop.PropertyType);
+                        object convertedValue;
+                        try
+                        {
+                            var value = bindingContext.ValueProvider.GetValue($"{prop.Name}".ToLower());
+                            if (value.FirstValue == null) continue;
+                            convertedValue = converter.ConvertFromString(null, new CultureInfo("en-GB"), (string)value.Values);
+                            prop.SetValue(requestModel, convertedValue);
+                            continue;
+                        }
+                        catch (NotSupportedException)
+                        {
+                            throw;
+                        }
                     }
                 }
 
@@ -93,20 +152,23 @@ namespace LHSBrackets.ModelBinder
                         }
                     }
                 }
-
-                EnsurePrimitiveType(prop);
-
-                foreach (var operation in Enum.GetValues<FilterOperationEnum>())
+                else
                 {
-                    var valueProviderResult = bindingContext.ValueProvider.GetValue($"{prop.Name}[{operation}]".ToLower()); // ex: "author[eq]"
-                    if (valueProviderResult.Length > 0)
-                        SetValueOnProperty(requestModel, prop, operation, (string)valueProviderResult.Values, null);
-                }
 
-                // support regular query param without operation ex: categoryId=2
-                var valueProviderResult2 = bindingContext.ValueProvider.GetValue($"{prop.Name}".ToLower()); // ex: "author[eq]"
-                if (valueProviderResult2.Length > 0)
-                    SetValueOnProperty(requestModel, prop, FilterOperationEnum.Eq, (string)valueProviderResult2.Values, null);
+                    EnsurePrimitiveType(prop);
+
+                    foreach (var operation in Enum.GetValues<FilterOperationEnum>())
+                    {
+                        var valueProviderResult = bindingContext.ValueProvider.GetValue($"{prop.Name}[{operation}]".ToLower()); // ex: "author[eq]"
+                        if (valueProviderResult.Length > 0)
+                            SetValueOnProperty(requestModel, prop, operation, (string)valueProviderResult.Values, null);
+                    }
+
+                    // support regular query param without operation ex: categoryId=2
+                    var valueProviderResult2 = bindingContext.ValueProvider.GetValue($"{prop.Name}".ToLower()); // ex: "author[eq]"
+                    if (valueProviderResult2.Length > 0)
+                        SetValueOnProperty(requestModel, prop, FilterOperationEnum.Eq, (string)valueProviderResult2.Values, null);
+                }
             }
 
             bindingContext.Result = ModelBindingResult.Success(requestModel);
