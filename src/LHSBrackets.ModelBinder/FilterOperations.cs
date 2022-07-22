@@ -42,8 +42,8 @@ namespace LHSBrackets.ModelBinder
                     var gottenObj = ConvertValue(value, selector);
                     dynamic d = gottenObj;
                     object? convertedObject;
-                    if (selector == null) convertedObject = Convert.ChangeType(d, InnerType);
-                    else convertedObject = Convert.ChangeType(d, selector.ReturnType);
+                    if (selector == null) convertedObject = Convert.ChangeType(d, Nullable.GetUnderlyingType(InnerType) ?? InnerType);
+                    else convertedObject = Convert.ChangeType(d, Nullable.GetUnderlyingType(selector.ReturnType) ?? selector.ReturnType);
                     list.Add(convertedObject);
                     hasMultipleValues = false;
                     break;
@@ -74,11 +74,11 @@ namespace LHSBrackets.ModelBinder
             TypeConverter converter;
             if (selector == null)
             {
-                converter = TypeDescriptor.GetConverter(InnerType);
+                converter = TypeDescriptor.GetConverter(Nullable.GetUnderlyingType(InnerType) ?? InnerType);
             }
             else
             {
-                converter = TypeDescriptor.GetConverter(selector.ReturnType);
+                converter = TypeDescriptor.GetConverter(Nullable.GetUnderlyingType(selector.ReturnType) ?? selector.ReturnType);
             }
             object convertedValue;
             try

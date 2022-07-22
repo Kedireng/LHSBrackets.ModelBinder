@@ -53,9 +53,10 @@ namespace LHSBrackets.ModelBinder.EF
                 {
                     propType = prop.PropertyType.GetGenericArguments()[0];
                 }
-                var found = entityProps.FirstOrDefault(x => x.Name == prop.Name && x.PropertyType == propType);
+                var found = entityProps.FirstOrDefault(x => x.Name == prop.Name);
 
                 if (found == null) continue;
+                if (found.PropertyType != propType) throw new Exception($"Query and model property types dont match for {found.Name} property!");
 
                 var param = Expression.Parameter(typeof(TEntity));
                 var body = Expression.PropertyOrField(param, found.Name);
