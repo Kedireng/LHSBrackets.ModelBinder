@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Data;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -214,8 +215,15 @@ namespace LHSBrackets.ModelBinder.EF
             var toLowerMethod = methods.Single(m => m.Name == nameof(String.ToLower)
             && m.GetParameters().Length == 0);
 
-            Expression loweredLeft = Expression.Call(left, toLowerMethod);
-            Expression loweredRight = Expression.Call(right, toLowerMethod);
+            var toStringMethodLeft = selector.ReturnType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .Single(p => p.Name == "ToString" && p.GetParameters().Length == 0);
+            var toStringMethodRight = value.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .Single(p => p.Name == "ToString" && p.GetParameters().Length == 0);
+
+            Expression toStringLeft = Expression.Call(left, toStringMethodLeft);
+            Expression toStringRight = Expression.Call(right, toStringMethodRight);
+            Expression loweredLeft = Expression.Call(toStringLeft, toLowerMethod);
+            Expression loweredRight = Expression.Call(toStringRight, toLowerMethod);
             Expression containsExpression = Expression.Call(loweredLeft, stringMethod, loweredRight);
             if (invert == true) containsExpression = Expression.Not(containsExpression);
 

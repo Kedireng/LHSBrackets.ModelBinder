@@ -53,8 +53,7 @@ namespace LHSBrackets.ModelBinder
                 case FilterOperationEnum.Nsw:
                 case FilterOperationEnum.Ew:
                 case FilterOperationEnum.New:
-                    var res = GetString(value, selector);
-                    list.Add(res);
+                    list.Add(value);
                     hasMultipleValues = false;
                     break;
                 case FilterOperationEnum.In:
@@ -93,22 +92,6 @@ namespace LHSBrackets.ModelBinder
             }
 
             return convertedValue;
-        }
-
-        private string GetString(string value, LambdaExpression? selector)
-        {
-            if (selector == null)
-            {
-                if (!typeof(string).IsAssignableFrom(InnerType))
-                    throw new Exception($"Operation type can only be used with string types.");
-            }
-            else
-            {
-                if (!typeof(string).IsAssignableFrom(selector.ReturnType))
-                    throw new Exception($"Operation type can only be used with string types.");
-            }
-
-            return value;
         }
     }
 }
