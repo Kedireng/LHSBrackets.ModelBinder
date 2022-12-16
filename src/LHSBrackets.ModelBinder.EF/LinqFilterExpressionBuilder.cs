@@ -215,13 +215,30 @@ namespace LHSBrackets.ModelBinder.EF
             var toLowerMethod = methods.Single(m => m.Name == nameof(String.ToLower)
             && m.GetParameters().Length == 0);
 
-            var toStringMethodLeft = selector.ReturnType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
-                .Single(p => p.Name == "ToString" && p.GetParameters().Length == 0);
-            var toStringMethodRight = value.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
-                .Single(p => p.Name == "ToString" && p.GetParameters().Length == 0);
+            Expression toStringLeft;
+            if (selector.ReturnType != typeof(string))
+            {
+                var toStringMethodLeft = selector.ReturnType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                    .Single(p => p.Name == "ToString" && p.GetParameters().Length == 0);
+                toStringLeft = Expression.Call(left, toStringMethodLeft);
+            }
+            else
+            {
+                toStringLeft = left;
+            }
 
-            Expression toStringLeft = Expression.Call(left, toStringMethodLeft);
-            Expression toStringRight = Expression.Call(right, toStringMethodRight);
+            Expression toStringRight;
+            if (value.GetType() != typeof(string))
+            {
+                var toStringMethodRight = value.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                    .Single(p => p.Name == "ToString" && p.GetParameters().Length == 0);
+                toStringRight = Expression.Call(right, toStringMethodRight);
+            }
+            else
+            {
+                toStringRight = right;
+            }
+            
             Expression loweredLeft = Expression.Call(toStringLeft, toLowerMethod);
             Expression loweredRight = Expression.Call(toStringRight, toLowerMethod);
             Expression containsExpression = Expression.Call(loweredLeft, stringMethod, loweredRight);
