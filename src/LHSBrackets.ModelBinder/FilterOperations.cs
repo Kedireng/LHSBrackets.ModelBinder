@@ -1,11 +1,9 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
-using System.Threading;
 
 namespace LHSBrackets.ModelBinder
 {
@@ -29,7 +27,7 @@ namespace LHSBrackets.ModelBinder
 
         internal void SetValue(FilterOperationEnum operation, string value, LambdaExpression? selector)
         {
-            var list = new List<object>();
+            List<object> list = new();
             bool hasMultipleValues = false;
             switch (operation)
             {
@@ -39,11 +37,18 @@ namespace LHSBrackets.ModelBinder
                 case FilterOperationEnum.Gte:
                 case FilterOperationEnum.Lt:
                 case FilterOperationEnum.Lte:
-                    var gottenObj = ConvertValue(value, selector);
+                    object gottenObj = ConvertValue(value, selector);
                     dynamic d = gottenObj;
                     object? convertedObject;
-                    if (selector == null) convertedObject = Convert.ChangeType(d, Nullable.GetUnderlyingType(InnerType) ?? InnerType);
-                    else convertedObject = Convert.ChangeType(d, Nullable.GetUnderlyingType(selector.ReturnType) ?? selector.ReturnType);
+                    if (selector == null)
+                    {
+                        convertedObject = Convert.ChangeType(d, Nullable.GetUnderlyingType(InnerType) ?? InnerType);
+                    }
+                    else
+                    {
+                        convertedObject = Convert.ChangeType(d, Nullable.GetUnderlyingType(selector.ReturnType) ?? selector.ReturnType);
+                    }
+
                     list.Add(convertedObject);
                     hasMultipleValues = false;
                     break;
@@ -58,7 +63,7 @@ namespace LHSBrackets.ModelBinder
                     break;
                 case FilterOperationEnum.In:
                 case FilterOperationEnum.Nin:
-                    var items = value.Split(",");
+                    string[] items = value.Split(",");
                     list.AddRange(items.Select(x => ConvertValue(x.Trim(' '), selector)));
                     hasMultipleValues = true;
                     break;

@@ -1,4 +1,5 @@
 using System;
+
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace LHSBrackets.ModelBinder
@@ -12,7 +13,7 @@ namespace LHSBrackets.ModelBinder
                 throw new ArgumentNullException(nameof(context));
             }
 
-            if (context.Metadata.UnderlyingOrModelType.IsAssignableToGenericType(typeof(FilterRequest<>)))
+            if (context.Metadata.UnderlyingOrModelType.IsAssignableToGenericType(typeof(IFilterRequest<>)))
             {
                 return new FilterModelBinder();
             }

@@ -1,5 +1,4 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
@@ -10,26 +9,18 @@ namespace LHSBrackets.ModelBinder.EF
 {
     public static class LinqFilterExpressionBuilder
     {
-        /// <summary>
-        /// Apply all FilterRequest filters to IQueryable
-        /// </summary>
-        /// <typeparam name="TEntity"></typeparam>
-        /// <typeparam name="TKey"></typeparam>
-        /// <param name="queryable"></param>
-        /// <param name="query"></param>
-        /// <returns></returns>
-        public static IQueryable<TEntity> ApplyAllFilters<TEntity, TKey>(
-            this IQueryable<TEntity> queryable,
-            TKey query) where TKey : FilterRequest<TEntity>
+        public static Expression<Func<TEntity, bool>>? GetAllFilters<TEntity, TKey>(
+            this TKey query)
+            where TKey : class, IFilterRequest<TEntity>
         {
-            var type = typeof(TEntity);
-            var queryType = query.GetType();
+            Type type = typeof(TEntity);
+            Type queryType = query.GetType();
 
-            var entityProps = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            PropertyInfo[] entityProps = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
 
-            var localQueryable = queryable;
+            List<Expression<Func<TEntity, bool>>> filterExpressions = new();
 
-            foreach (var prop in queryType
+            foreach (PropertyInfo? prop in queryType
                 .GetProperties(BindingFlags.Public | BindingFlags.Instance)
                 .Where(x => typeof(FilterOperations).IsAssignableFrom(x.PropertyType)))
             {
@@ -41,7 +32,7 @@ namespace LHSBrackets.ModelBinder.EF
                     {
                         if (baseType.IsGenericType)
                         {
-                            var generic = baseType.GetGenericTypeDefinition();
+                            Type generic = baseType.GetGenericTypeDefinition();
                             if (generic == typeof(FilterRequest<>))
                             {
                                 propType = baseType.GetGenericArguments()[0];
@@ -54,17 +45,110 @@ namespace LHSBrackets.ModelBinder.EF
                 {
                     propType = prop.PropertyType.GetGenericArguments()[0];
                 }
-                var found = entityProps.FirstOrDefault(x => x.Name == prop.Name);
+                PropertyInfo? found = entityProps.FirstOrDefault(x => x.Name == prop.Name);
 
-                if (found == null) continue;
-                if (found.PropertyType != propType) throw new Exception($"Query and model property types dont match for {found.Name} property!");
+                if (found == null)
+                {
+                    continue;
+                }
 
-                var param = Expression.Parameter(typeof(TEntity));
-                var body = Expression.PropertyOrField(param, found.Name);
+                if (found.PropertyType != propType)
+                {
+                    throw new Exception($"Query and model property types dont match for {found.Name} property!");
+                }
+
+                ParameterExpression param = Expression.Parameter(typeof(TEntity));
+                MemberExpression body = Expression.PropertyOrField(param, found.Name);
                 Type myGeneric = typeof(Func<,>);
                 Type constructedClass = myGeneric.MakeGenericType(typeof(TEntity), propType!);
-                var exp = Expression.Lambda(constructedClass, body, param);
-                var fo = (FilterOperations)prop.GetValue(query, null)!;
+                LambdaExpression exp = Expression.Lambda(constructedClass, body, param);
+                FilterOperations fo = (FilterOperations)prop.GetValue(query, null)!;
+
+                filterExpressions.AddRange(CreateFilters<TEntity>(exp, fo));
+            }
+
+            if (!filterExpressions.Any())
+            {
+                return null;
+            }
+
+            Expression<Func<TEntity, bool>> res = filterExpressions.First();
+
+            if (filterExpressions.Count == 1)
+            {
+                return res;
+            }
+
+            foreach (Expression<Func<TEntity, bool>> exp in filterExpressions.GetRange(1, filterExpressions.Count - 1))
+            {
+                res = res.And(exp);
+            }
+
+            return res;
+        }
+
+        /// <summary>
+        /// Apply all FilterRequest filters to IQueryable
+        /// </summary>
+        /// <typeparam name="TEntity"></typeparam>
+        /// <typeparam name="TKey"></typeparam>
+        /// <param name="queryable"></param>
+        /// <param name="query"></param>
+        /// <returns></returns>
+        public static IQueryable<TEntity> ApplyAllFilters<TEntity, TKey>(
+            this IQueryable<TEntity> queryable,
+            TKey query) where TKey : class, IFilterRequest<TEntity>
+        {
+            Type type = typeof(TEntity);
+            Type queryType = query.GetType();
+
+            PropertyInfo[] entityProps = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+
+            IQueryable<TEntity> localQueryable = queryable;
+
+            foreach (PropertyInfo? prop in queryType
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Where(x => typeof(FilterOperations).IsAssignableFrom(x.PropertyType)))
+            {
+                Type? propType = null;
+                if (prop.PropertyType.GetGenericArguments()[0].IsAssignableToGenericType(typeof(FilterRequest<>)))
+                {
+                    Type? baseType = prop.PropertyType.GetGenericArguments()[0];
+                    while (null != (baseType = baseType.BaseType))
+                    {
+                        if (baseType.IsGenericType)
+                        {
+                            Type generic = baseType.GetGenericTypeDefinition();
+                            if (generic == typeof(FilterRequest<>))
+                            {
+                                propType = baseType.GetGenericArguments()[0];
+                                break;
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    propType = prop.PropertyType.GetGenericArguments()[0];
+                }
+                PropertyInfo? found = entityProps.FirstOrDefault(x => x.Name == prop.Name);
+
+                if (found == null)
+                {
+                    continue;
+                }
+
+                if (found.PropertyType != propType)
+                {
+                    throw new Exception($"Query and model property types dont match for {found.Name} property!");
+                }
+
+                ParameterExpression param = Expression.Parameter(typeof(TEntity));
+                MemberExpression body = Expression.PropertyOrField(param, found.Name);
+                Type myGeneric = typeof(Func<,>);
+                Type constructedClass = myGeneric.MakeGenericType(typeof(TEntity), propType!);
+                LambdaExpression exp = Expression.Lambda(constructedClass, body, param);
+                FilterOperations fo = (FilterOperations)prop.GetValue(query, null)!;
 
                 localQueryable = localQueryable.ApplyFilters(exp, fo);
             }
@@ -87,13 +171,15 @@ namespace LHSBrackets.ModelBinder.EF
             FilterOperations? filters)
         {
             if (filters == null)
+            {
                 return source;
+            }
 
-            var filterExpressions = new List<Expression<Func<TEntity, bool>>>();
+            List<Expression<Func<TEntity, bool>>> filterExpressions = new();
 
-           
+
             filterExpressions.AddRange(CreateFilters<TEntity>(selector, filters));
-            foreach (var expression in filterExpressions)
+            foreach (Expression<Func<TEntity, bool>> expression in filterExpressions)
             {
                 source = source.Where(expression);
             }
@@ -146,7 +232,7 @@ namespace LHSBrackets.ModelBinder.EF
                 default: throw new Exception($"Couldn't map enum: {filterOperationType}");
             }
 
-            var methods = typeof(string).GetMethods();
+            MethodInfo[] methods = typeof(string).GetMethods();
             return (methods.Single(m => m.Name == methodName
             && m.GetParameters().Length == 1
             && m.GetParameters().First().ParameterType == typeof(String)), inverted);
@@ -154,21 +240,29 @@ namespace LHSBrackets.ModelBinder.EF
 
         private static List<Expression<Func<TEntity, bool>>> CreateFilters<TEntity>(LambdaExpression selector, FilterOperations filterOperations)
         {
-            var expressions = new List<Expression<Func<TEntity, bool>>>();
+            List<Expression<Func<TEntity, bool>>> expressions = new();
 
-            foreach (var filterOperation in filterOperations)
+            if (filterOperations == null)
             {
-                var enumerator = filterOperation.values.GetEnumerator();
-                var any = enumerator.MoveNext();
-                if (!any) continue;
+                return expressions;
+            }
 
-                var localSelector = selector;
+            foreach ((FilterOperationEnum operation, IEnumerable<object> values, bool hasMultipleValues, LambdaExpression? selector) filterOperation in filterOperations)
+            {
+                IEnumerator<object> enumerator = filterOperation.values.GetEnumerator();
+                bool any = enumerator.MoveNext();
+                if (!any)
+                {
+                    continue;
+                }
+
+                LambdaExpression localSelector = selector;
                 Expression<Func<TEntity, bool>>? exp = null;
 
                 if (filterOperation.selector != null)
                 {
-                    var selBody = selector.Body as MemberExpression;
-                    var body = Expression.Property(selBody, (PropertyInfo)((MemberExpression)filterOperation.selector.Body).Member);
+                    MemberExpression? selBody = selector.Body as MemberExpression;
+                    MemberExpression body = Expression.Property(selBody, (PropertyInfo)((MemberExpression)filterOperation.selector.Body).Member);
                     Type myGeneric = typeof(Func<,>);
                     Type constructedClass = myGeneric.MakeGenericType(typeof(TEntity), filterOperation.selector.ReturnType);
                     localSelector = Expression.Lambda(constructedClass, body, selector.Parameters);
@@ -181,13 +275,13 @@ namespace LHSBrackets.ModelBinder.EF
                     || filterOperation.operation == FilterOperationEnum.Ew
                     || filterOperation.operation == FilterOperationEnum.New)
                 {
-                    (var method, var inverted) = MapOperationToStringMethod(filterOperation.operation);
+                    (MethodInfo? method, bool inverted) = MapOperationToStringMethod(filterOperation.operation);
                     exp = CreateStringExpression<TEntity>(method, localSelector, enumerator.Current, inverted);
                 }
                 else if (!filterOperation.hasMultipleValues)
                 {
                     {
-                        var linqOperationExp = MapOperationToLinqExpression(filterOperation.operation);
+                        Func<Expression, Expression, Expression> linqOperationExp = MapOperationToLinqExpression(filterOperation.operation);
                         exp = CreateBasicExpression<TEntity>(linqOperationExp, localSelector, enumerator.Current);
                     }
                 }
@@ -208,17 +302,17 @@ namespace LHSBrackets.ModelBinder.EF
             object value,
             bool invert = false)
         {
-            (var left, var param) = CreateLeftExpression(typeof(TEntity), selector);
+            (Expression? left, ParameterExpression? param) = CreateLeftExpression(typeof(TEntity), selector);
             left = Expression.Convert(left, selector.ReturnType);
             Expression right = Expression.Constant(value);
-            var methods = typeof(string).GetMethods();
-            var toLowerMethod = methods.Single(m => m.Name == nameof(String.ToLower)
+            MethodInfo[] methods = typeof(string).GetMethods();
+            MethodInfo toLowerMethod = methods.Single(m => m.Name == nameof(String.ToLower)
             && m.GetParameters().Length == 0);
 
             Expression toStringLeft;
             if (selector.ReturnType != typeof(string))
             {
-                var toStringMethodLeft = selector.ReturnType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                MethodInfo toStringMethodLeft = selector.ReturnType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
                     .Single(p => p.Name == "ToString" && p.GetParameters().Length == 0);
                 toStringLeft = Expression.Call(left, toStringMethodLeft);
             }
@@ -230,7 +324,7 @@ namespace LHSBrackets.ModelBinder.EF
             Expression toStringRight;
             if (value.GetType() != typeof(string))
             {
-                var toStringMethodRight = value.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                MethodInfo toStringMethodRight = value.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
                     .Single(p => p.Name == "ToString" && p.GetParameters().Length == 0);
                 toStringRight = Expression.Call(right, toStringMethodRight);
             }
@@ -238,13 +332,16 @@ namespace LHSBrackets.ModelBinder.EF
             {
                 toStringRight = right;
             }
-            
+
             Expression loweredLeft = Expression.Call(toStringLeft, toLowerMethod);
             Expression loweredRight = Expression.Call(toStringRight, toLowerMethod);
             Expression containsExpression = Expression.Call(loweredLeft, stringMethod, loweredRight);
-            if (invert == true) containsExpression = Expression.Not(containsExpression);
+            if (invert == true)
+            {
+                containsExpression = Expression.Not(containsExpression);
+            }
 
-            var lambdaExpression = Expression.Lambda<Func<TEntity, bool>>(containsExpression, param);
+            Expression<Func<TEntity, bool>> lambdaExpression = Expression.Lambda<Func<TEntity, bool>>(containsExpression, param);
             return lambdaExpression;
         }
 
@@ -256,10 +353,10 @@ namespace LHSBrackets.ModelBinder.EF
             IEnumerable<object> values,
             bool invert = false)
         {
-            (var left, var param) = CreateLeftExpression(typeof(TEntity), selector);
+            (Expression? left, ParameterExpression? param) = CreateLeftExpression(typeof(TEntity), selector);
             Type listType = typeof(List<>).MakeGenericType(new[] { selector.ReturnType });
-            dynamic list = (dynamic)Activator.CreateInstance(listType)!;
-            foreach(dynamic val in values)
+            dynamic list = Activator.CreateInstance(listType)!;
+            foreach (dynamic val in values)
             {
                 Type t = Nullable.GetUnderlyingType(selector.ReturnType) ?? selector.ReturnType;
 
@@ -267,14 +364,17 @@ namespace LHSBrackets.ModelBinder.EF
             }
             Expression right = Expression.Constant(list);
 
-            var containsMethodRef = typeof(Enumerable).GetMethods(BindingFlags.Static | BindingFlags.Public)
+            MethodInfo containsMethodRef = typeof(Enumerable).GetMethods(BindingFlags.Static | BindingFlags.Public)
                    .Single(m => m.Name == nameof(Enumerable.Contains) && m.GetParameters().Length == 2);
             MethodInfo containsMethod = containsMethodRef.MakeGenericMethod(selector.ReturnType);
 
             Expression containsExpression = Expression.Call(containsMethod, right, left);
-            if (invert == true) containsExpression = Expression.Not(containsExpression);
+            if (invert == true)
+            {
+                containsExpression = Expression.Not(containsExpression);
+            }
 
-            var lambdaExpression = Expression.Lambda<Func<TEntity, bool>>(containsExpression, param);
+            Expression<Func<TEntity, bool>> lambdaExpression = Expression.Lambda<Func<TEntity, bool>>(containsExpression, param);
             return lambdaExpression;
         }
 
@@ -283,13 +383,13 @@ namespace LHSBrackets.ModelBinder.EF
             LambdaExpression selector,
             object value)
         {
-            (var left, var param) = CreateLeftExpression(typeof(TEntity), selector);
-            var nullableType = MakeNullableType(selector.ReturnType);
+            (Expression? left, ParameterExpression? param) = CreateLeftExpression(typeof(TEntity), selector);
+            Type nullableType = MakeNullableType(selector.ReturnType);
             left = Expression.Convert(left, nullableType);
             Expression right = Expression.Constant(value, nullableType);
 
-            var finalExpression = expressionOperator.Invoke(left, right);
-            var lambdaExpression = Expression.Lambda<Func<TEntity, bool>>(finalExpression, param);
+            Expression finalExpression = expressionOperator.Invoke(left, right);
+            Expression<Func<TEntity, bool>> lambdaExpression = Expression.Lambda<Func<TEntity, bool>>(finalExpression, param);
             return lambdaExpression;
         }
 
@@ -298,12 +398,12 @@ namespace LHSBrackets.ModelBinder.EF
         /// </summary>
         static (Expression Left, ParameterExpression Param) CreateLeftExpression(Type parameterType, LambdaExpression selector)
         {
-            var parameterName = "x";
-            var parameter = Expression.Parameter(parameterType, parameterName);
+            string parameterName = "x";
+            ParameterExpression parameter = Expression.Parameter(parameterType, parameterName);
 
-            var propertyName = GetParameterName(selector);
-            var memberExpression = (Expression)parameter;
-            foreach (var member in propertyName.Split('.').Skip(1))
+            string propertyName = GetParameterName(selector);
+            Expression memberExpression = parameter;
+            foreach (string? member in propertyName.Split('.').Skip(1))
             {
                 memberExpression = Expression.PropertyOrField(memberExpression, member);
             }
@@ -325,10 +425,14 @@ namespace LHSBrackets.ModelBinder.EF
         private static Type MakeNullableType(Type type)
         {
             if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Nullable<>))
+            {
                 return type;
+            }
 
             if (type == typeof(string))
+            {
                 return type;
+            }
 
             return typeof(Nullable<>).MakeGenericType(type);
         }
