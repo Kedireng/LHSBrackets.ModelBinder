@@ -1,3 +1,4 @@
+
 using System;
 using System.Collections.Generic;
 using System.Data;
@@ -13,8 +14,13 @@ namespace LHSBrackets.ModelBinder.EF
             this TKey query)
             where TKey : class, IFilterRequest<TEntity>
         {
-            Type type = typeof(TEntity);
-            Type queryType = query.GetType();
+            return GetAllFiltersLocal<TEntity, TKey>(query, typeof(TEntity));
+        }
+
+        private static Expression<Func<TEntity, bool>>? GetAllFiltersLocal<TEntity, TKey>(
+            this TKey query, Type type, MemberExpression? selector = null, ParameterExpression? parameter = null)
+        {
+            Type queryType = typeof(TKey);
 
             PropertyInfo[] entityProps = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
 
@@ -22,22 +28,29 @@ namespace LHSBrackets.ModelBinder.EF
 
             foreach (PropertyInfo? prop in queryType
                 .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                .Where(x => typeof(FilterOperations).IsAssignableFrom(x.PropertyType)))
+                .Where(x => typeof(FilterOperations).IsAssignableFrom(x.PropertyType) || x.PropertyType.IsAssignableToGenericType(typeof(IFilterRequest<>))))
             {
                 Type? propType = null;
-                if (prop.PropertyType.GetGenericArguments()[0].IsAssignableToGenericType(typeof(FilterRequest<>)))
+                if (prop.PropertyType.IsAssignableToGenericType(typeof(IFilterRequest<>)))
+                {
+                    Type[] interfaces = prop.PropertyType.GetInterfaces();
+                    foreach (Type t in interfaces)
+                    {
+                        if (t.GetGenericTypeDefinition() == typeof(IFilterRequest<>))
+                        {
+                            propType = t.GetGenericArguments()[0];
+                        }
+                    }
+                }
+                else if (prop.PropertyType.GetGenericArguments()[0].IsAssignableToGenericType(typeof(IFilterRequest<>)))
                 {
                     Type? baseType = prop.PropertyType.GetGenericArguments()[0];
-                    while (null != (baseType = baseType.BaseType))
+                    Type[] interfaces = baseType.GetInterfaces();
+                    foreach (Type t in interfaces)
                     {
-                        if (baseType.IsGenericType)
+                        if (t.GetGenericTypeDefinition() == typeof(IFilterRequest<>))
                         {
-                            Type generic = baseType.GetGenericTypeDefinition();
-                            if (generic == typeof(FilterRequest<>))
-                            {
-                                propType = baseType.GetGenericArguments()[0];
-                                break;
-                            }
+                            propType = t.GetGenericArguments()[0];
                         }
                     }
                 }
@@ -52,19 +65,76 @@ namespace LHSBrackets.ModelBinder.EF
                     continue;
                 }
 
-                if (found.PropertyType != propType)
+                if (found.PropertyType != propType && Nullable.GetUnderlyingType(found.PropertyType) != propType)
                 {
                     throw new Exception($"Query and model property types dont match for {found.Name} property!");
                 }
 
-                ParameterExpression param = Expression.Parameter(typeof(TEntity));
-                MemberExpression body = Expression.PropertyOrField(param, found.Name);
-                Type myGeneric = typeof(Func<,>);
-                Type constructedClass = myGeneric.MakeGenericType(typeof(TEntity), propType!);
-                LambdaExpression exp = Expression.Lambda(constructedClass, body, param);
-                FilterOperations fo = (FilterOperations)prop.GetValue(query, null)!;
 
-                filterExpressions.AddRange(CreateFilters<TEntity>(exp, fo));
+                if (prop.PropertyType.IsAssignableToGenericType(typeof(IFilterRequest<>)))
+                {
+                    LambdaExpression exp;
+                    MemberExpression body;
+                    ParameterExpression param;
+                    if (selector != null && parameter != null)
+                    {
+                        param = parameter;
+                        body = Expression.PropertyOrField(selector, found.Name);
+                        Type myGeneric = typeof(Func<,>);
+                        Type constructedClass = myGeneric.MakeGenericType(parameter.Type, found.PropertyType);
+                        exp = Expression.Lambda(constructedClass, body, parameter);
+                    }
+                    else
+                    {
+                        param = Expression.Parameter(typeof(TEntity));
+                        body = Expression.PropertyOrField(param, found.Name);
+                        Type myGeneric = typeof(Func<,>);
+                        Type constructedClass = myGeneric.MakeGenericType(typeof(TEntity), found.PropertyType);
+                        exp = Expression.Lambda(constructedClass, body, param);
+                    }
+
+                    (Expression left, ParameterExpression param1) = CreateLeftExpression(typeof(TEntity), exp);
+                    Expression lambdaExpression = Expression.Lambda(left, param1);
+
+                    object? val = prop.GetValue(query, null);
+
+                    if (val == null || propType == null)
+                    {
+                        continue;
+                    }
+                    MethodInfo method = typeof(LinqFilterExpressionBuilder).GetMethod(nameof(GetAllFiltersLocal),
+                                BindingFlags.NonPublic | BindingFlags.Static)!;
+                    method = method.MakeGenericMethod(typeof(TEntity), prop.PropertyType);
+                    Expression<Func<TEntity, bool>>? ex = (Expression<Func<TEntity, bool>>?)method.Invoke(null, new object[] { val, propType, body, param })!;
+
+                    if (ex != null)
+                    {
+                        filterExpressions.Add(ex);
+                    }
+                }
+                else
+                {
+                    LambdaExpression exp;
+                    if (selector != null && parameter != null)
+                    {
+                        MemberExpression body = Expression.PropertyOrField(selector, found.Name);
+                        Type myGeneric = typeof(Func<,>);
+                        Type constructedClass = myGeneric.MakeGenericType(parameter.Type, found.PropertyType);
+                        exp = Expression.Lambda(constructedClass, body, parameter);
+                    }
+                    else
+                    {
+                        ParameterExpression param = Expression.Parameter(typeof(TEntity));
+                        MemberExpression body = Expression.PropertyOrField(param, found.Name);
+                        Type myGeneric = typeof(Func<,>);
+                        Type constructedClass = myGeneric.MakeGenericType(typeof(TEntity), found.PropertyType);
+                        exp = Expression.Lambda(constructedClass, body, param);
+                    }
+
+                    FilterOperations fo = (FilterOperations)prop.GetValue(query, null)!;
+
+                    filterExpressions.AddRange(CreateFilters<TEntity>(exp, fo));
+                }
             }
 
             if (!filterExpressions.Any())
@@ -99,61 +169,16 @@ namespace LHSBrackets.ModelBinder.EF
             this IQueryable<TEntity> queryable,
             TKey query) where TKey : class, IFilterRequest<TEntity>
         {
-            Type type = typeof(TEntity);
-            Type queryType = query.GetType();
+            Expression<Func<TEntity, bool>>? filters = GetAllFilters<TEntity, TKey>(query);
 
-            PropertyInfo[] entityProps = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
-
-            IQueryable<TEntity> localQueryable = queryable;
-
-            foreach (PropertyInfo? prop in queryType
-                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                .Where(x => typeof(FilterOperations).IsAssignableFrom(x.PropertyType)))
+            if (filters == null)
             {
-                Type? propType = null;
-                if (prop.PropertyType.GetGenericArguments()[0].IsAssignableToGenericType(typeof(FilterRequest<>)))
-                {
-                    Type? baseType = prop.PropertyType.GetGenericArguments()[0];
-                    while (null != (baseType = baseType.BaseType))
-                    {
-                        if (baseType.IsGenericType)
-                        {
-                            Type generic = baseType.GetGenericTypeDefinition();
-                            if (generic == typeof(FilterRequest<>))
-                            {
-                                propType = baseType.GetGenericArguments()[0];
-                                break;
-                            }
-                        }
-                    }
-                }
-                else
-                {
-                    propType = prop.PropertyType.GetGenericArguments()[0];
-                }
-                PropertyInfo? found = entityProps.FirstOrDefault(x => x.Name == prop.Name);
-
-                if (found == null)
-                {
-                    continue;
-                }
-
-                if (found.PropertyType != propType)
-                {
-                    throw new Exception($"Query and model property types dont match for {found.Name} property!");
-                }
-
-                ParameterExpression param = Expression.Parameter(typeof(TEntity));
-                MemberExpression body = Expression.PropertyOrField(param, found.Name);
-                Type myGeneric = typeof(Func<,>);
-                Type constructedClass = myGeneric.MakeGenericType(typeof(TEntity), propType!);
-                LambdaExpression exp = Expression.Lambda(constructedClass, body, param);
-                FilterOperations fo = (FilterOperations)prop.GetValue(query, null)!;
-
-                localQueryable = localQueryable.ApplyFilters(exp, fo);
+                return queryable;
             }
 
-            return localQueryable;
+            queryable = queryable.Where(filters);
+
+            return queryable;
         }
 
         public static IQueryable<TEntity> ApplyFilters<TEntity, TKey>(
@@ -162,7 +187,6 @@ namespace LHSBrackets.ModelBinder.EF
             FilterOperations<TKey>? filters)
         {
             return source.ApplyFilters((LambdaExpression)selector, filters);
-
         }
 
         public static IQueryable<TEntity> ApplyFilters<TEntity>(

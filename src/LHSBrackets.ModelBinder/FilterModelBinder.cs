@@ -19,15 +19,24 @@ namespace LHSBrackets.ModelBinder
                 throw new ArgumentNullException(nameof(bindingContext));
             }
 
-            object? requestModel = Activator.CreateInstance(bindingContext.ModelType);
-            if (!bindingContext.ModelType.IsAssignableToGenericType(typeof(IFilterRequest<>)))
+            dynamic? requestModel = BindModel(bindingContext, bindingContext.ModelType);
+
+            bindingContext.Result = ModelBindingResult.Success(requestModel);
+            return Task.CompletedTask;
+        }
+
+        private dynamic? BindModel(ModelBindingContext bindingContext, Type objectType, string? path = null)
+        {
+            dynamic? requestModel = Activator.CreateInstance(objectType);
+            if (!objectType.IsAssignableToGenericType(typeof(IFilterRequest<>)))
             {
                 throw new ArgumentException($"The modeltype {requestModel?.GetType()} does not inherit from {typeof(FilterRequest<>)}");
             }
 
-            PropertyInfo[] properties = bindingContext.ModelType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            PropertyInfo[] properties = objectType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
             foreach (PropertyInfo prop in properties)
             {
+                string propPath = path == null ? prop.Name : path + $"[{prop.Name}]";
                 if (!typeof(FilterOperations).IsAssignableFrom(prop.PropertyType))
                 {
                     if (typeof(IEnumerable).IsAssignableFrom(prop.PropertyType) && prop.PropertyType.GetGenericArguments().Length == 1)
@@ -44,7 +53,7 @@ namespace LHSBrackets.ModelBinder
                                 foreach (FilterOperationEnum operation in Enum.GetValues<FilterOperationEnum>())
                                 {
                                     ValueProviderResult valueProviderRes = bindingContext.ValueProvider
-                                        .GetValue($"{prop.Name}[{i}][{innerProp.Name}][{operation}]".ToLower()); // ex: "author[email][eq]"
+                                        .GetValue($"{propPath}[{i}][{innerProp.Name}][{operation.ToString().ToLower()}]"); // ex: "author[email][eq]"
                                     if (valueProviderRes.Length == 0)
                                     {
                                         continue;
@@ -97,13 +106,18 @@ namespace LHSBrackets.ModelBinder
                         }
                         continue;
                     }
+                    else if (prop.PropertyType.IsAssignableToGenericType(typeof(IFilterRequest<>)))
+                    {
+                        prop.SetValue(requestModel, BindModel(bindingContext, prop.PropertyType, propPath));
+                        continue;
+                    }
                     else
                     {
                         TypeConverter converter = TypeDescriptor.GetConverter(prop.PropertyType);
                         object convertedValue;
                         try
                         {
-                            ValueProviderResult value = bindingContext.ValueProvider.GetValue($"{prop.Name}".ToLower());
+                            ValueProviderResult value = bindingContext.ValueProvider.GetValue($"{propPath}");
                             if (value.FirstValue == null)
                             {
                                 continue;
@@ -129,7 +143,7 @@ namespace LHSBrackets.ModelBinder
                         foreach (FilterOperationEnum operation in Enum.GetValues<FilterOperationEnum>())
                         {
                             ValueProviderResult valueProviderResult = bindingContext.ValueProvider
-                                .GetValue($"{prop.Name}[{innerProp.Name}][{operation}]".ToLower()); // ex: "author[email][eq]"
+                                .GetValue($"{propPath}[{innerProp.Name}][{operation.ToString().ToLower()}]"); // ex: "author[email][eq]"
                             if (valueProviderResult.Length > 0)
                             {
                                 if (inst.InnerType.IsAssignableToGenericType(typeof(FilterRequest<>)))
@@ -183,7 +197,7 @@ namespace LHSBrackets.ModelBinder
 
                     foreach (FilterOperationEnum operation in Enum.GetValues<FilterOperationEnum>())
                     {
-                        ValueProviderResult valueProviderResult = bindingContext.ValueProvider.GetValue($"{prop.Name}[{operation}]".ToLower()); // ex: "author[eq]"
+                        ValueProviderResult valueProviderResult = bindingContext.ValueProvider.GetValue($"{propPath}[{operation.ToString().ToLower()}]"); // ex: "author[eq]"
                         if (valueProviderResult.Length > 0)
                         {
                             SetValueOnProperty(requestModel, prop, operation, (string)valueProviderResult.Values, null);
@@ -191,7 +205,7 @@ namespace LHSBrackets.ModelBinder
                     }
 
                     // support regular query param without operation ex: categoryId=2
-                    ValueProviderResult valueProviderResult2 = bindingContext.ValueProvider.GetValue($"{prop.Name}".ToLower()); // ex: "author[eq]"
+                    ValueProviderResult valueProviderResult2 = bindingContext.ValueProvider.GetValue($"{propPath}"); // ex: "author[eq]"
                     if (valueProviderResult2.Length > 0)
                     {
                         SetValueOnProperty(requestModel, prop, FilterOperationEnum.Eq, (string)valueProviderResult2.Values, null);
@@ -199,8 +213,7 @@ namespace LHSBrackets.ModelBinder
                 }
             }
 
-            bindingContext.Result = ModelBindingResult.Success(requestModel);
-            return Task.CompletedTask;
+            return requestModel;
         }
 
         private static void EnsurePrimitiveType(PropertyInfo prop)
