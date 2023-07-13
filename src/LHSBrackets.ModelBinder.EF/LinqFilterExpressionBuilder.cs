@@ -408,9 +408,16 @@ namespace LHSBrackets.ModelBinder.EF
             object value)
         {
             (Expression? left, ParameterExpression? param) = CreateLeftExpression(typeof(TEntity), selector);
-            Type nullableType = MakeNullableType(selector.ReturnType);
-            left = Expression.Convert(left, nullableType);
-            Expression right = Expression.Constant(value, nullableType);
+            Expression right;
+            if (selector.ReturnType.IsGenericType && selector.ReturnType.GetGenericTypeDefinition() == typeof(Nullable<>))
+            {
+                Type nullableType = MakeNullableType(selector.ReturnType);
+                right = Expression.Constant(value, nullableType);
+            }
+            else
+            {
+                right = Expression.Constant(value, selector.ReturnType);
+            }
 
             Expression finalExpression = expressionOperator.Invoke(left, right);
             Expression<Func<TEntity, bool>> lambdaExpression = Expression.Lambda<Func<TEntity, bool>>(finalExpression, param);

@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.ComponentModel;
 using System.Globalization;
+using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading.Tasks;
@@ -30,10 +31,11 @@ namespace LHSBrackets.ModelBinder
             dynamic? requestModel = Activator.CreateInstance(objectType);
             if (!objectType.IsAssignableToGenericType(typeof(IFilterRequest<>)))
             {
-                throw new ArgumentException($"The modeltype {requestModel?.GetType()} does not inherit from {typeof(FilterRequest<>)}");
+                throw new ArgumentException($"The modeltype {requestModel?.GetType()} does not inherit from {typeof(IFilterRequest<>)}");
             }
 
             PropertyInfo[] properties = objectType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            System.Collections.Generic.List<string> keys = bindingContext.HttpContext.Request.Query.Keys.ToList();
             foreach (PropertyInfo prop in properties)
             {
                 string propPath = path == null ? prop.Name : path + $"[{prop.Name}]";
@@ -46,55 +48,18 @@ namespace LHSBrackets.ModelBinder
                         int i = 0;
                         while (true)
                         {
-                            bool oneFound = false;
-                            dynamic innerObj = Activator.CreateInstance(prop.PropertyType.GetGenericArguments()[0])!;
-                            foreach (PropertyInfo innerProp in innerProperties)
-                            {
-                                foreach (FilterOperationEnum operation in Enum.GetValues<FilterOperationEnum>())
-                                {
-                                    ValueProviderResult valueProviderRes = bindingContext.ValueProvider
-                                        .GetValue($"{propPath}[{i}][{innerProp.Name}][{operation.ToString().ToLower()}]"); // ex: "author[email][eq]"
-                                    if (valueProviderRes.Length == 0)
-                                    {
-                                        continue;
-                                    }
+                            propPath = propPath + $"[{i}]";
 
-                                    oneFound = true;
-                                    if (prop.PropertyType.GetGenericArguments()[0].IsAssignableToGenericType(typeof(FilterRequest<>)))
-                                    {
-                                        Type? innerType = null;
-                                        Type? baseType = prop.PropertyType.GetGenericArguments()[0];
-                                        while (null != (baseType = baseType.BaseType))
-                                        {
-                                            if (baseType.IsGenericType)
-                                            {
-                                                Type generic = baseType.GetGenericTypeDefinition();
-                                                if (generic == typeof(FilterRequest<>))
-                                                {
-                                                    innerType = baseType.GetGenericArguments()[0];
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        PropertyInfo? innerTypeProp = innerType!.GetProperty(innerProp.Name);
-                                        if (innerTypeProp == null)
-                                        {
-                                            continue;
-                                        }
-
-                                        ParameterExpression param = Expression.Parameter(innerType);
-                                        MemberExpression body = Expression.Property(param, innerTypeProp);
-                                        Type myGeneric = typeof(Func<,>);
-                                        Type constructedClass = myGeneric.MakeGenericType(innerType, innerTypeProp.PropertyType);
-                                        LambdaExpression exp = Expression.Lambda(constructedClass, body, param);
-
-                                        SetValueOnProperty(innerObj, innerProp, operation, (string)valueProviderRes.Values, null);
-                                    }
-                                }
-                            }
-                            if (!oneFound)
+                            if (!keys.Any(x => x.StartsWith(propPath, StringComparison.OrdinalIgnoreCase)))
                             {
                                 break;
+                            }
+
+                            dynamic? innerObj = BindModel(bindingContext, prop.PropertyType.GetGenericArguments()[0], propPath);
+
+                            if (innerObj == null)
+                            {
+                                continue;
                             }
 
                             obj.Add(innerObj);
@@ -142,11 +107,19 @@ namespace LHSBrackets.ModelBinder
                     {
                         foreach (FilterOperationEnum operation in Enum.GetValues<FilterOperationEnum>())
                         {
+                            string locPath = propPath + $"[{innerProp.Name}][{operation.ToString().ToLower()}]";
+                            string? found = keys.Find(x => x.Equals(locPath, StringComparison.OrdinalIgnoreCase));
+
+                            if (found == null)
+                            {
+                                continue;
+                            }
+
                             ValueProviderResult valueProviderResult = bindingContext.ValueProvider
-                                .GetValue($"{propPath}[{innerProp.Name}][{operation.ToString().ToLower()}]"); // ex: "author[email][eq]"
+                                .GetValue(found); // ex: "author[email][eq]"
                             if (valueProviderResult.Length > 0)
                             {
-                                if (inst.InnerType.IsAssignableToGenericType(typeof(FilterRequest<>)))
+                                if (inst.InnerType.IsAssignableToGenericType(typeof(IFilterRequest<>)))
                                 {
                                     Type? innerType = null;
                                     Type? baseType = inst.InnerType;
@@ -197,7 +170,14 @@ namespace LHSBrackets.ModelBinder
 
                     foreach (FilterOperationEnum operation in Enum.GetValues<FilterOperationEnum>())
                     {
-                        ValueProviderResult valueProviderResult = bindingContext.ValueProvider.GetValue($"{propPath}[{operation.ToString().ToLower()}]"); // ex: "author[eq]"
+                        string locPath = propPath + $"[{operation.ToString().ToLower()}]";
+                        string? foundInner = keys.Find(x => x.Equals(locPath, StringComparison.OrdinalIgnoreCase));
+
+                        if (foundInner == null)
+                        {
+                            continue;
+                        }
+                        ValueProviderResult valueProviderResult = bindingContext.ValueProvider.GetValue(foundInner); // ex: "author[eq]"
                         if (valueProviderResult.Length > 0)
                         {
                             SetValueOnProperty(requestModel, prop, operation, (string)valueProviderResult.Values, null);
@@ -205,7 +185,14 @@ namespace LHSBrackets.ModelBinder
                     }
 
                     // support regular query param without operation ex: categoryId=2
-                    ValueProviderResult valueProviderResult2 = bindingContext.ValueProvider.GetValue($"{propPath}"); // ex: "author[eq]"
+                    string? found = keys.Find(x => x.Equals(propPath, StringComparison.OrdinalIgnoreCase));
+
+                    if (found == null)
+                    {
+                        continue;
+                    }
+
+                    ValueProviderResult valueProviderResult2 = bindingContext.ValueProvider.GetValue(found); // ex: "author[eq]"
                     if (valueProviderResult2.Length > 0)
                     {
                         SetValueOnProperty(requestModel, prop, FilterOperationEnum.Eq, (string)valueProviderResult2.Values, null);
