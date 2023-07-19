@@ -25,7 +25,7 @@ namespace LHSBrackets.ModelBinder
             InnerType = innerType;
         }
 
-        internal void SetValue(FilterOperationEnum operation, string value, LambdaExpression? selector)
+        public void SetValue(FilterOperationEnum operation, string value, LambdaExpression? selector)
         {
             List<object> list = new();
             bool hasMultipleValues = false;

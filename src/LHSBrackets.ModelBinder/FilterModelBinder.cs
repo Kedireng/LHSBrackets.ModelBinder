@@ -218,7 +218,7 @@ namespace LHSBrackets.ModelBinder
                 prop.SetValue(requestModel, propertyObject);
             }
 
-            MethodInfo? method = prop.PropertyType.GetMethod(nameof(FilterOperations.SetValue), BindingFlags.Instance | BindingFlags.NonPublic);
+            MethodInfo? method = prop.PropertyType.GetMethod(nameof(FilterOperations.SetValue), BindingFlags.Instance | BindingFlags.Public);
             method!.Invoke(propertyObject, new object[] { operation, value, selector });
         }
     }
