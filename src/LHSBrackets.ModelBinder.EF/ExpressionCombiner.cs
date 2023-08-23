@@ -14,7 +14,7 @@ namespace LHSBrackets.ModelBinder.EF
             newExp = visitor.Visit(newExp) as Expression<Func<T, bool>>;
 
             // now you can and together the two expressions
-            BinaryExpression binExp = Expression.And(exp.Body, newExp.Body);
+            BinaryExpression binExp = Expression.AndAlso(exp.Body, newExp.Body);
             // and return a new lambda, that will do what you want. NOTE that the binExp has reference only to te newExp.Parameters[0] (there is only 1) parameter, and no other
             return Expression.Lambda<Func<T, bool>>(binExp, newExp.Parameters);
         }
